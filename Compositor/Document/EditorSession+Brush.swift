@@ -8,14 +8,20 @@ extension EditorSession {
             && activeLayerID.map { document?.effectiveVisibleIDs.contains($0) == true } == true
             && (!isMaskSelected || activeLayer?.mask?.isEnabled == true)
             && (isMaskSelected || activeLayer?.adjustment == nil)
+            && (isMaskSelected || activeLayer?.smartObjectID == nil)
     }
     /// Tiled raster edit of the active layer's pixels or mask, within the shared pixel budgets.
     func makeRasterEdit(for layer: ImageLayer, settings: BrushSettings = BrushSettings()) throws -> BrushStroke {
         guard let document else { throw ProjectError.tooLarge }
         let stroke = try BrushStroke(layer: layer, mask: isMaskSelected, settings: settings, canvas: document.size)
-        let used = document.layers.filter { $0.id != layer.id }.reduce(0) { total, layer in
-            let image = isMaskSelected ? layer.mask?.asset.image : layer.asset?.image
-            return total + (image.map { $0.width * $0.height } ?? 0)
+        let used: Int
+        if isMaskSelected {
+            used = document.layers.filter { $0.id != layer.id }.reduce(0) { total, layer in
+                total + (layer.mask.map { $0.asset.image.width * $0.asset.image.height } ?? 0)
+            }
+        } else {
+            let current = layer.asset.map { $0.image.width * $0.image.height } ?? 0
+            used = document.sourcePixelCount() - current
         }
         stroke.pixelLimit = 100_000_000 - used
         stroke.selectionClip = try selection?.clip(canvas: document.size)

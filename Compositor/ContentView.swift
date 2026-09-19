@@ -185,6 +185,15 @@ struct ContentView: View {
                 if (error as NSError).code != NSUserCancelledError { session.importError = error.localizedDescription }
             }
         }
+        .fileImporter(isPresented: $session.showsSmartObjectReplacer,
+                      allowedContentTypes: [.jpeg, .png, .heic, .tiff], allowsMultipleSelection: false) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { Task { await session.replaceActiveSmartObjectContents(from: url) } }
+            case .failure(let error):
+                if (error as NSError).code != NSUserCancelledError { session.importError = error.localizedDescription }
+            }
+        }
         .alert("Import couldn’t finish", isPresented: Binding(
             get: { session.importError != nil }, set: { if !$0 { session.importError = nil } })) {
                 Button("OK", role: .cancel) { session.importError = nil }

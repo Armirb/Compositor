@@ -183,10 +183,25 @@ struct DistortPreviewCache {
 }
 
 extension EditorSession {
+    /// Smart Object source pixels stay protected. Their layer masks may still be distorted independently.
+    var canDistortCurrentTarget: Bool {
+        if transformEdit?.mask == true || (transformEdit == nil && transformTargetsMask) { return true }
+        let targets: [ImageLayer]
+        if let group = transformEdit?.group, let document {
+            let ids = Set(group.originals.keys)
+            targets = document.layers.filter { ids.contains($0.id) }
+        } else if transformsAsGroup {
+            targets = groupTransformMembers
+        } else {
+            targets = activeLayer.map { [$0] } ?? []
+        }
+        return !targets.isEmpty && targets.allSatisfy { $0.smartObjectID == nil }
+    }
+
     /// Cmd-drag on a transform handle: the corners start moving freely. Each distortion resamples
     /// the pixels, so the edit then waits for Apply rather than applying on mouse-up.
     func beginDistort() {
-        guard let edit = transformEdit, edit.corners == nil, edit.draft.isValid else { return }
+        guard canDistortCurrentTarget, let edit = transformEdit, edit.corners == nil, edit.draft.isValid else { return }
         transformEdit = TransformEdit(layerID: edit.layerID, draft: edit.draft, persistent: true, floating: edit.floating,
                                       corners: DistortWarp.corners(of: edit.draft), mask: edit.mask, group: edit.group)
     }

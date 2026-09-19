@@ -78,6 +78,7 @@ extension EditorSession {
         _ = showsBusy
         guard document != nil, let layer = activeLayer, !isProjectBusy, !isImporting, brushStroke == nil, pixelMove == nil,
               renamingLayerID == nil, !showsNewDocument, !showsImporter, selectedLayerIDs.count == 1, !layer.isGroup || isMaskSelected,
+              isMaskSelected || layer.smartObjectID == nil,
               document?.effectiveVisibleIDs.contains(layer.id) == true, selection?.isEmpty != true else { return false }
         return isMaskSelected ? layer.mask?.isEnabled == true : layer.asset != nil
     }

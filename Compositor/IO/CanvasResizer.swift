@@ -15,13 +15,14 @@ actor CanvasResizer {
         guard options.width != old.width || options.height != old.height || offset != .zero else { return snapshot }
         var manifest = ProjectManifest(resolution: old.resolution, documentID: old.documentID,
             width: options.width, height: options.height, activeLayerID: old.activeLayerID, layers: [])
+        manifest.smartObjects = old.smartObjects
         for layer in old.layers {
             var transform = layer.transform
             transform.origin.x += offset.x
             transform.origin.y += offset.y
             guard transform.isValid else { throw ProjectError.tooLarge }
             manifest.layers.append(ProjectLayerRecord(id: layer.id, name: layer.name,
-                isVisible: layer.isVisible, transform: transform, imageFile: layer.imageFile, parentID: layer.parentID, isGroup: layer.isGroup, opacity: layer.opacity, blendMode: layer.blendMode, maskFile: layer.maskFile, maskEnabled: layer.maskEnabled, maskSourceID: layer.maskSourceID, adjustment: layer.adjustment,
+                isVisible: layer.isVisible, transform: transform, imageFile: layer.imageFile, parentID: layer.parentID, isGroup: layer.isGroup, opacity: layer.opacity, blendMode: layer.blendMode, maskFile: layer.maskFile, maskEnabled: layer.maskEnabled, maskSourceID: layer.maskSourceID, smartObjectID: layer.smartObjectID, adjustment: layer.adjustment,
                 maskPlacement: layer.maskPlacement.map { placement -> LayerTransform in
                     var moved = placement
                     moved.origin.x += offset.x
@@ -33,7 +34,9 @@ actor CanvasResizer {
         // A colored extension is separate bottom-layer content. The old canvas
         // intersection remains transparent, including holes in the existing artwork.
         if let color = options.fill, options.width > old.width || options.height > old.height {
-            let used = images.values.reduce(0) { $0 + $1.image.width * $1.image.height }
+            let rasterIDs = Set(old.layers.filter { $0.smartObjectID == nil && $0.imageFile != nil }.map(\.id))
+            let used = images.filter { rasterIDs.contains($0.key) }.values.reduce(0) { $0 + $1.image.width * $1.image.height }
+                + snapshot.smartObjects.values.reduce(0) { $0 + $1.image.width * $1.image.height }
             guard options.width * options.height <= 100_000_000 - used,
                   manifest.layers.count < 10_000 else { throw ProjectError.tooLarge }
             guard [color.red, color.green, color.blue].allSatisfy({ $0.isFinite && (0...1).contains($0) }) else {
@@ -67,6 +70,6 @@ actor CanvasResizer {
                 transform: LayerTransform(origin: .zero, size: CGSize(width: options.width, height: options.height)),
                 imageFile: "\(id.uuidString).png"), at: 0)
         }
-        return ProjectSnapshot(manifest: manifest, images: images, masks: snapshot.masks)
+        return ProjectSnapshot(manifest: manifest, images: images, masks: snapshot.masks, smartObjects: snapshot.smartObjects)
     }
 }

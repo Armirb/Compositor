@@ -567,16 +567,17 @@ private final class LayerCell: NSTableCellView, NSTextFieldDelegate {
         linkButton.toolTip = layer.mask?.isLinked == false ? "Link layer and mask so they move together"
             : "Unlink layer and mask to move or transform them separately"
         linkButton.setAccessibilityLabel(layer.mask?.isLinked == false ? "Link mask: \(layer.name)" : "Unlink mask: \(layer.name)")
-        thumbnail.toolTip = "Select image pixels"
+        thumbnail.toolTip = layer.isSmartObject ? "Select Smart Object" : "Select image pixels"
         maskThumbnail.toolTip = "Select layer mask; Shift-click to enable/disable; Cmd-click to select its black areas (Cmd-Shift adds, Cmd-Option subtracts)"
-        thumbnail.setAccessibilityLabel("Select image: \(layer.name)")
+        thumbnail.setAccessibilityLabel("Select \(layer.isSmartObject ? "Smart Object" : "image"): \(layer.name)")
         maskThumbnail.setAccessibilityLabel("Select mask: \(layer.name)")
         updateTarget()
         layerName = layer.name
         // A reused cell must not carry another row's half-finished rename.
         if renaming, layerID != layer.id { restoreLabel() }
         if !renaming { nameLabel.stringValue = (layer.maskSourceID == nil ? "" : "↳ ") + layer.name }
-        dimensions.stringValue = layer.adjustment != nil ? "Adjustment · Double-click to edit" : layer.isGroup ? "Folder" : "\(Int(layer.size.width.rounded())) × \(Int(layer.size.height.rounded())) px"
+        dimensions.stringValue = layer.adjustment != nil ? "Adjustment · Double-click to edit" : layer.isGroup ? "Folder"
+            : "\(layer.isSmartObject ? "Smart Object · " : "")\(Int(layer.size.width.rounded())) × \(Int(layer.size.height.rounded())) px"
         if let source = layer.maskSourceID {
             let sourceName = session.document?.layers.first(where: { $0.id == source })?.name ?? "Missing source"
             dimensions.stringValue = "Clipped to \(sourceName)"

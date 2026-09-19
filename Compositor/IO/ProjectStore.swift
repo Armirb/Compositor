@@ -9,7 +9,7 @@ extension UTType {
 
 nonisolated struct ProjectManifest: Codable, Sendable {
     var format = "com.compositor.project"
-    var version = 7
+    var version = 8
     var colorSpace = "sRGB"
     var resolution: Double? = nil // Older version-1 projects default to 72 pixels/inch.
     let documentID: UUID
@@ -17,6 +17,14 @@ nonisolated struct ProjectManifest: Codable, Sendable {
     let height: Int
     let activeLayerID: UUID?
     var layers: [ProjectLayerRecord]
+    /// Shared embedded raster sources. Nil keeps older manifests decoding without a migration pass.
+    var smartObjects: [ProjectSmartObjectRecord]? = nil
+}
+
+nonisolated struct ProjectSmartObjectRecord: Codable, Sendable {
+    let id: UUID
+    let name: String
+    let imageFile: String
 }
 
 nonisolated struct ProjectLayerRecord: Codable, Sendable {
@@ -32,6 +40,7 @@ nonisolated struct ProjectLayerRecord: Codable, Sendable {
     var maskFile: String? = nil
     var maskEnabled: Bool? = nil
     var maskSourceID: UUID? = nil
+    var smartObjectID: UUID? = nil
     var adjustment: LayerAdjustment? = nil
     /// A mask moved apart from its layer: where it sits on the document.
     var maskPlacement: LayerTransform? = nil
@@ -45,6 +54,7 @@ nonisolated struct ProjectSnapshot: @unchecked Sendable {
     let manifest: ProjectManifest
     let images: [UUID: ImportedImage]
     var masks: [UUID: ImportedImage] = [:]
+    var smartObjects: [UUID: ImportedImage] = [:]
 }
 
 nonisolated enum ProjectError: LocalizedError {
@@ -52,7 +62,7 @@ nonisolated enum ProjectError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalid: "This is not a valid Compositor project, or its metadata is damaged."
-        case .version(let version): "This project uses format version \(version). This app supports versions 1–7."
+        case .version(let version): "This project uses format version \(version). This app supports versions 1–8."
         case .missingImage: "An image inside the project is missing or damaged. The current document has not been replaced."
         case .tooLarge: "This project exceeds the supported canvas, layer, file-size, or 100-megapixel image limit."
         case .encode: "An image could not be saved. The previous project has not been replaced."
@@ -70,7 +80,19 @@ actor ProjectStore {
     func save(_ snapshot: ProjectSnapshot, to url: URL) throws {
         try validate(snapshot.manifest)
         var images: [String: FileWrapper] = [:]
+        var smartObjects: [String: FileWrapper] = [:]
         var pixels = 0, maskPixels = 0
+        func encodedPNG(_ image: CGImage) throws -> Data {
+            try autoreleasepool {
+                let data = NSMutableData()
+                guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
+                    throw ProjectError.encode
+                }
+                CGImageDestinationAddImage(destination, image, nil)
+                guard CGImageDestinationFinalize(destination) else { throw ProjectError.encode }
+                return data as Data
+            }
+        }
         for layer in snapshot.manifest.layers {
           for isMask in [false, true] {
             guard let filename = isMask ? layer.maskFile : layer.imageFile else { continue }
@@ -79,17 +101,17 @@ actor ProjectStore {
                 guard LayerMask.isValid(asset.image) else { throw ProjectError.invalid }
                 try checkSize(width: asset.image.width, height: asset.image.height, used: &maskPixels)
             } else { try checkSize(width: asset.image.width, height: asset.image.height, used: &pixels) }
-            let data = try autoreleasepool {
-                let data = NSMutableData()
-                guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
-                    throw ProjectError.encode
-                }
-                CGImageDestinationAddImage(destination, asset.image, nil)
-                guard CGImageDestinationFinalize(destination) else { throw ProjectError.encode }
-                return data as Data
-            }
-            images[filename] = FileWrapper(regularFileWithContents: data)
+            images[filename] = FileWrapper(regularFileWithContents: try encodedPNG(asset.image))
           }
+        }
+        for record in snapshot.manifest.smartObjects ?? [] {
+            guard let asset = snapshot.smartObjects[record.id] else { throw ProjectError.missingImage }
+            try checkSize(width: asset.image.width, height: asset.image.height, used: &pixels)
+            smartObjects[record.imageFile] = FileWrapper(regularFileWithContents: try encodedPNG(asset.image))
+        }
+        for layer in snapshot.manifest.layers where layer.smartObjectID != nil {
+            guard let id = layer.smartObjectID, let source = snapshot.smartObjects[id],
+                  snapshot.images[layer.id]?.image === source.image else { throw ProjectError.missingImage }
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -97,7 +119,8 @@ actor ProjectStore {
         guard metadata.count <= 4 * 1024 * 1024 else { throw ProjectError.tooLarge }
         let package = FileWrapper(directoryWithFileWrappers: [
             "manifest.json": FileWrapper(regularFileWithContents: metadata),
-            "images": FileWrapper(directoryWithFileWrappers: images)
+            "images": FileWrapper(directoryWithFileWrappers: images),
+            "smart-objects": FileWrapper(directoryWithFileWrappers: smartObjects)
         ])
         var coordinationError: NSError?
         var writeError: Error?
@@ -132,13 +155,37 @@ actor ProjectStore {
         do { header = try JSONDecoder().decode(Header.self, from: metadata) }
         catch { throw ProjectError.invalid }
         guard header.format == "com.compositor.project" else { throw ProjectError.invalid }
-        guard (1...7).contains(header.version) else { throw ProjectError.version(header.version) }
+        guard (1...8).contains(header.version) else { throw ProjectError.version(header.version) }
         do { manifest = try JSONDecoder().decode(ProjectManifest.self, from: metadata) }
         catch { throw ProjectError.invalid }
         try validate(manifest)
         var images: [UUID: ImportedImage] = [:]
         var masks: [UUID: ImportedImage] = [:]
+        var smartObjects: [UUID: ImportedImage] = [:]
         var pixels = 0, maskPixels = 0
+        for record in manifest.smartObjects ?? [] {
+            let file = url.appendingPathComponent("smart-objects").appendingPathComponent(record.imageFile)
+            try checkFile(file, inside: url, maximumBytes: 512 * 1024 * 1024)
+            let asset = try autoreleasepool {
+                guard let source = CGImageSourceCreateWithURL(file as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+                      CGImageSourceGetType(source) as String? == UTType.png.identifier,
+                      CGImageSourceGetCount(source) == 1,
+                      let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                      let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                      let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                      (properties[kCGImagePropertyDepth] as? Int ?? 8) <= 8 else { throw ProjectError.missingImage }
+                try checkSize(width: width, height: height, used: &pixels)
+                guard let image = CGImageSourceCreateImageAtIndex(source, 0,
+                    [kCGImageSourceShouldCacheImmediately: true] as CFDictionary),
+                      let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceThumbnailMaxPixelSize: 96,
+                        kCGImageSourceShouldCacheImmediately: true
+                      ] as CFDictionary) else { throw ProjectError.missingImage }
+                return ImportedImage(image: image, thumbnail: thumbnail, name: record.name)
+            }
+            smartObjects[record.id] = asset
+        }
         for layer in manifest.layers {
           for isMask in [false, true] {
             guard let filename = isMask ? layer.maskFile : layer.imageFile else { continue }
@@ -167,21 +214,41 @@ actor ProjectStore {
             if isMask { masks[layer.id] = asset } else { images[layer.id] = asset }
           }
         }
-        return ProjectSnapshot(manifest: manifest, images: images, masks: masks)
+        for layer in manifest.layers {
+            if let id = layer.smartObjectID {
+                guard let asset = smartObjects[id] else { throw ProjectError.missingImage }
+                images[layer.id] = asset
+            }
+        }
+        return ProjectSnapshot(manifest: manifest, images: images, masks: masks, smartObjects: smartObjects)
     }
 
     private func validate(_ manifest: ProjectManifest) throws {
         guard manifest.format == "com.compositor.project" else { throw ProjectError.invalid }
-        guard (1...7).contains(manifest.version) else { throw ProjectError.version(manifest.version) }
+        guard (1...8).contains(manifest.version) else { throw ProjectError.version(manifest.version) }
         guard manifest.colorSpace == "sRGB" else { throw ProjectError.invalid }
         if let resolution = manifest.resolution {
             guard resolution.isFinite, (1...9600).contains(resolution) else { throw ProjectError.invalid }
         }
         guard (1...30_000).contains(manifest.width), (1...30_000).contains(manifest.height),
               manifest.layers.count <= 10_000 else { throw ProjectError.tooLarge }
+        let smartRecords = manifest.smartObjects ?? []
+        guard manifest.version >= 8 || smartRecords.isEmpty else { throw ProjectError.invalid }
+        var smartIDs = Set<UUID>()
+        for record in smartRecords {
+            guard smartIDs.insert(record.id).inserted,
+                  record.imageFile == "\(record.id.uuidString).png",
+                  !record.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  record.name.utf8.count <= 16_384 else { throw ProjectError.invalid }
+        }
         for layer in manifest.layers {
             if let adjustment = layer.adjustment {
-                guard manifest.version >= 7, layer.isGroup != true, layer.imageFile == nil, adjustment.isValid else { throw ProjectError.invalid }
+                guard manifest.version >= 7, layer.isGroup != true, layer.imageFile == nil,
+                      layer.smartObjectID == nil, adjustment.isValid else { throw ProjectError.invalid }
+            }
+            if let smartObjectID = layer.smartObjectID {
+                guard manifest.version >= 8, smartIDs.contains(smartObjectID), layer.isGroup != true,
+                      layer.imageFile == nil, layer.adjustment == nil else { throw ProjectError.invalid }
             }
             // Layer masks arrived in version 4, folder masks in version 6.
             guard layer.maskFile == nil || (manifest.version >= (layer.isGroup == true ? 6 : 4)
@@ -197,6 +264,7 @@ actor ProjectStore {
         try LayerHierarchy.validate(manifest.layers)
         try LiveMaskGraph.validate(manifest.layers)
         if manifest.version < 5, manifest.layers.contains(where: { $0.maskSourceID != nil }) { throw ProjectError.invalid }
+        if manifest.version < 8, manifest.layers.contains(where: { $0.smartObjectID != nil }) { throw ProjectError.invalid }
         if manifest.version == 1, manifest.layers.contains(where: { $0.parentID != nil || $0.isGroup == true }) { throw ProjectError.invalid }
         var ids = Set<UUID>()
         for layer in manifest.layers {
@@ -205,6 +273,7 @@ actor ProjectStore {
                   layer.name.utf8.count <= 16_384,
                   layer.imageFile == nil || layer.imageFile == "\(layer.id.uuidString).png" else { throw ProjectError.invalid }
         }
+        guard Set(manifest.layers.compactMap(\.smartObjectID)) == smartIDs else { throw ProjectError.invalid }
         if let id = manifest.activeLayerID, !ids.contains(id) { throw ProjectError.invalid }
     }
 

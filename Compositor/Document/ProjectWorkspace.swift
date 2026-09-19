@@ -167,8 +167,15 @@ final class ProjectWorkspace {
         guard target.session.document == nil || target.session.canEditLayers else { return }
         let included = sourceTab.session.descendantIDs(of: id).union([id])
         var copied = sourceDocument.layers.filter { included.contains($0.id) }
-        let used = target.session.document?.layers.reduce(0) { $0 + ($1.asset.map { $0.image.width * $0.image.height } ?? 0) } ?? 0
-        let added = copied.reduce(0) { $0 + ($1.asset.map { $0.image.width * $0.image.height } ?? 0) }
+        let used = target.session.document?.sourcePixelCount() ?? 0
+        let addedRaster = copied.filter { $0.smartObjectID == nil }.reduce(0) {
+            $0 + ($1.asset.map { $0.image.width * $0.image.height } ?? 0)
+        }
+        let sourceObjectIDs = Set(copied.compactMap(\.smartObjectID))
+        let addedSmart = sourceObjectIDs.reduce(0) { total, id in
+            total + (snapshot.smartObjects[id].map { $0.image.width * $0.image.height } ?? 0)
+        }
+        let added = addedRaster + addedSmart
         guard used + added <= 100_000_000 else { target.session.importError = "The copied layers exceed this project’s 100-megapixel limit."; return }
         isManaging = true
         sourceTab.session.isProjectBusy = true
@@ -184,8 +191,10 @@ final class ProjectWorkspace {
                 let layerID = copied[i].id
                 copied[i].asset = try await Task.detached(priority: .userInitiated) { try LiveMaskBaker.bake(snapshot, target: layerID) }.value
                 copied[i].maskSourceID = nil
+                copied[i].smartObjectID = nil
             }
             let mapping = Dictionary(uniqueKeysWithValues: copied.map { ($0.id, UUID()) })
+            let contentMapping = Dictionary(uniqueKeysWithValues: Set(copied.compactMap(\.smartObjectID)).map { ($0, UUID()) })
             let size = target.session.document?.size ?? sourceDocument.size
             let anchor = copied.first(where: { $0.id == id })?.transform.center ?? CGPoint(x: sourceDocument.size.width/2, y: sourceDocument.size.height/2)
             let center = point ?? CGPoint(x: size.width/2, y: size.height/2)
@@ -196,11 +205,17 @@ final class ProjectWorkspace {
                 mask?.placement?.origin.x += center.x-anchor.x; mask?.placement?.origin.y += center.y-anchor.y
                 return ImageLayer(id: mapping[layer.id]!, asset: layer.asset, name: layer.name, isVisible: layer.isVisible,
                     transform: transform, parentID: layer.parentID.flatMap { mapping[$0] }, isGroup: layer.isGroup,
-                    opacity: layer.opacity, blendMode: layer.blendMode, mask: mask, maskSourceID: layer.maskSourceID.flatMap { mapping[$0] }, adjustment: layer.adjustment, shape: layer.shape)
+                    opacity: layer.opacity, blendMode: layer.blendMode, mask: mask, maskSourceID: layer.maskSourceID.flatMap { mapping[$0] },
+                    smartObjectID: layer.smartObjectID.flatMap { contentMapping[$0] }, adjustment: layer.adjustment, shape: layer.shape)
             }
             target.session.isProjectBusy = false
             target.session.beginEdit("Copy Layers from Project")
             if target.session.document == nil { target.session.createDocument(width: Int(size.width), height: Int(size.height)) }
+            for (sourceID, destinationID) in contentMapping {
+                if let asset = snapshot.smartObjects[sourceID] {
+                    target.session.document?.smartObjects[destinationID] = SmartObjectContent(id: destinationID, asset: asset)
+                }
+            }
             target.session.document?.layers.append(contentsOf: layers)
             target.session.activeLayerID = mapping[id]
             target.session.endEdit()

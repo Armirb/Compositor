@@ -1,8 +1,8 @@
-# Compositor project format, versions 1–6
+# Compositor project format, versions 1–8
 
 A `.comp` file is a macOS document package containing `manifest.json` and an `images/` directory of `<layer UUID>.png` assets.
 
-The manifest identifies `com.compositor.project`, version `6` for new saves (versions `1`–`5` remain readable), and the sRGB working space. It stores document UUID, pixel dimensions, active layer UUID, and layers in bottom-to-top order. Each layer stores its UUID, name, visibility, transform (origin, size, clockwise rotation, flips, sampling), and optional image filename. Blank layers have no image asset.
+The manifest identifies `com.compositor.project`, version `8` for new saves (versions `1`–`7` remain readable), and the sRGB working space. It stores document UUID, pixel dimensions, active layer UUID, and layers in bottom-to-top order. Each layer stores its UUID, name, visibility, transform (origin, size, clockwise rotation, flips, sampling), and optional image filename. Blank layers have no image asset.
 
 Embedded PNGs preserve source pixels and transparency; transforms remain separate. Projects survive moving or deleting imported source photos. Saving uses a coordinated atomic package replacement. Unsupported versions, invalid metadata, missing assets, unsafe paths, and oversized data are rejected before replacing the live document.
 
@@ -25,3 +25,7 @@ Version 5 adds optional `maskSourceID`: the UUID of a non-group layer supplying 
 UI terminology: these alpha links are clipping masks. Option-click assigns the lower sibling’s base or releases the connection. Multiple clipped layers share one base, show indented above it, and release when moved outside the contiguous stack. The underlying `maskSourceID` representation is unchanged.
 
 Version 6 allows `maskFile` and `maskEnabled` on group records. A folder has no image, so its mask covers the folder's own transform rectangle (the canvas size when the folder was created); Image Size resamples it through that transform, and Canvas Size and Crop preserve its pixels, exactly as for layer masks. Groups are pass-through, so an enabled folder mask multiplies the coverage of every descendant layer, together with that layer's own mask and any enclosing folders' masks; clipping-mask coverage is unaffected. Files declaring versions 1–5 cannot give a group a mask, and older app builds reject v6.
+
+Version 7 adds adjustment layers. Their editable settings are stored in `adjustment`; they carry no image asset and render against the composite below them. Older app builds reject v7 rather than silently flattening the adjustment.
+
+Version 8 adds embedded raster Smart Objects. The manifest's `smartObjects` array records each shared content UUID, display name and `<content UUID>.png` source under `smart-objects/`. A Smart Object layer stores `smartObjectID` and no per-layer `imageFile`; multiple instances may reference one source. Replacing that source updates every instance, while Rasterize removes only the selected instance's reference and keeps its current pixels. Missing sources, unused records, group or adjustment references, unsafe filenames and files declaring Smart Object metadata before v8 are rejected.

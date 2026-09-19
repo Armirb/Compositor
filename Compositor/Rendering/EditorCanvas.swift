@@ -1096,7 +1096,8 @@ final class CanvasView: NSView {
         switch hit {
         case .resize(let index):
             // Distorting (Cmd held, or already distorted) moves corners freely: the white arrow says so.
-            let distorting = session.transformEdit?.corners != nil || flags.contains(.command)
+            let distorting = session.canDistortCurrentTarget
+                && (session.transformEdit?.corners != nil || flags.contains(.command))
             return distorting ? Self.distortCursor : geometry.resizeCursor(for: index)
         case .rotate: return Self.rotationCursor
         case .move: return duplicate ? Self.duplicateCursor : Self.moveCursor
@@ -1784,7 +1785,8 @@ final class CanvasView: NSView {
         else { duplicatesTransformOnDrag = false }
         if session.transformEdit == nil { session.beginTransform(persistent: false) }
         // Cmd-dragging a handle distorts, as in Photoshop; once distorted, handles keep distorting.
-        if case .resize(let index) = mode, modifiers.contains(.command) || session.transformEdit?.corners != nil {
+        if case .resize(let index) = mode, session.canDistortCurrentTarget,
+           modifiers.contains(.command) || session.transformEdit?.corners != nil {
             session.beginDistort()
             if session.transformEdit?.corners != nil { mode = .distort(index) }
         }

@@ -17,9 +17,10 @@ actor ImageResizer {
         let old = snapshot.manifest
         var manifest = ProjectManifest(resolution: options.resolution, documentID: old.documentID,
             width: options.width, height: options.height, activeLayerID: old.activeLayerID, layers: [])
+        manifest.smartObjects = old.smartObjects
         if old.width == options.width && old.height == options.height {
             manifest.layers = old.layers
-            return ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks)
+            return ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks, smartObjects: snapshot.smartObjects)
         }
         guard options.width * options.height <= 100_000_000 else { throw ProjectError.tooLarge }
         let sx = CGFloat(options.width) / CGFloat(old.width)
@@ -36,10 +37,16 @@ actor ImageResizer {
             let left = floor(corners.map(\.x).min()!), top = floor(corners.map(\.y).min()!)
             let width = Int(ceil(corners.map(\.x).max()!) - left)
             let height = Int(ceil(corners.map(\.y).max()!) - top)
-            let transform = LayerTransform(origin: CGPoint(x: left, y: top),
+            var transform = LayerTransform(origin: CGPoint(x: left, y: top),
                 size: CGSize(width: width, height: height), sampling: options.sampling)
             guard transform.isValid else { throw ProjectError.tooLarge }
-            if layer.imageFile != nil {
+            if layer.smartObjectID != nil {
+                let scaled = layer.transform.unitToDocument.concatenating(CGAffineTransform(scaleX: sx, y: sy))
+                transform = layer.transform.placing(scaled)
+                transform.sampling = options.sampling
+                guard transform.isValid, let source = snapshot.images[layer.id] else { throw ProjectError.missingImage }
+                images[layer.id] = source
+            } else if layer.imageFile != nil {
                 guard (1...30_000).contains(width), (1...30_000).contains(height),
                       width * height <= 100_000_000 - usedPixels else { throw ProjectError.tooLarge }
                 usedPixels += width * height
@@ -72,7 +79,7 @@ actor ImageResizer {
                 guard let source = snapshot.masks[layer.id] else { throw ProjectError.missingImage }
                 // Uniform masks are resolution independent; avoid allocating a full canvas for reveal/hide-all.
                 // A mask on its own placement keeps its pixels; the placement scales with the canvas.
-                if (source.image.width == 1 && source.image.height == 1) || layer.maskPlacement != nil { masks[layer.id] = source }
+                if layer.smartObjectID != nil || (source.image.width == 1 && source.image.height == 1) || layer.maskPlacement != nil { masks[layer.id] = source }
                 else {
                     guard (1...30_000).contains(width), (1...30_000).contains(height),
                           width * height <= 100_000_000 - usedMaskPixels else { throw ProjectError.tooLarge }
@@ -91,11 +98,11 @@ actor ImageResizer {
                 }
             }
             manifest.layers.append(ProjectLayerRecord(id: layer.id, name: layer.name, isVisible: layer.isVisible,
-                transform: transform, imageFile: layer.imageFile, parentID: layer.parentID, isGroup: layer.isGroup, opacity: layer.opacity, blendMode: layer.blendMode, maskFile: layer.maskFile, maskEnabled: layer.maskEnabled, maskSourceID: layer.maskSourceID, adjustment: layer.adjustment,
+                transform: transform, imageFile: layer.imageFile, parentID: layer.parentID, isGroup: layer.isGroup, opacity: layer.opacity, blendMode: layer.blendMode, maskFile: layer.maskFile, maskEnabled: layer.maskEnabled, maskSourceID: layer.maskSourceID, smartObjectID: layer.smartObjectID, adjustment: layer.adjustment,
                 maskPlacement: layer.maskPlacement.map { $0.placing($0.unitToDocument.concatenating(CGAffineTransform(scaleX: sx, y: sy))) },
                 maskLinked: layer.maskLinked))
         }
-        return ProjectSnapshot(manifest: manifest, images: images, masks: masks)
+        return ProjectSnapshot(manifest: manifest, images: images, masks: masks, smartObjects: snapshot.smartObjects)
     }
 }
 
@@ -110,7 +117,10 @@ extension EditorSession {
         let m = snapshot.manifest
         document = CanvasDocument(id: m.documentID, width: m.width, height: m.height,
             layers: m.layers.map { ImageLayer(id: $0.id, asset: snapshot.images[$0.id], name: $0.name,
-                isVisible: $0.isVisible, transform: $0.transform, parentID: $0.parentID, isGroup: $0.isGroup == true, opacity: $0.opacity ?? 1, blendMode: $0.blendMode ?? .normal, mask: snapshot.mask(for: $0), maskSourceID: $0.maskSourceID, adjustment: $0.adjustment) }, resolution: m.resolution ?? 72)
+                isVisible: $0.isVisible, transform: $0.transform, parentID: $0.parentID, isGroup: $0.isGroup == true, opacity: $0.opacity ?? 1, blendMode: $0.blendMode ?? .normal, mask: snapshot.mask(for: $0), maskSourceID: $0.maskSourceID, smartObjectID: $0.smartObjectID, adjustment: $0.adjustment) },
+            smartObjects: Dictionary(uniqueKeysWithValues: snapshot.smartObjects.map {
+                ($0.key, SmartObjectContent(id: $0.key, asset: $0.value))
+            }), resolution: m.resolution ?? 72)
         endEdit()
         viewport.fit(documentSize: document!.size)
     }

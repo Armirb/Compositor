@@ -133,12 +133,17 @@ extension EditorSession {
         let removed = descendantIDs(of: id).union([id])
         beginEdit("Delete Layer")
         document?.layers.removeAll { removed.contains($0.id) }
+        document?.pruneUnusedSmartObjects()
         for i in document?.layers.indices ?? 0..<0 {
             if let source = document?.layers[i].maskSourceID, removed.contains(source) {
                 document?.layers[i].maskSourceID = nil
-                if let asset = baked[document!.layers[i].id] { document?.layers[i].asset = asset }
+                if let asset = baked[document!.layers[i].id] {
+                    document?.layers[i].asset = asset
+                    document?.layers[i].smartObjectID = nil
+                }
             }
         }
+        document?.pruneUnusedSmartObjects()
         if activeLayerID.map({ removed.contains($0) }) == true {
             let layers = document?.layers ?? []
             activeLayerID = layers.isEmpty ? nil : layers[min(index, layers.count - 1)].id

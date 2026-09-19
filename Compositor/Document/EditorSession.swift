@@ -3,7 +3,7 @@ import SwiftUI
 struct ImageLayer: Identifiable, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.name == rhs.name && lhs.isVisible == rhs.isVisible && lhs.transform == rhs.transform
-            && lhs.asset?.image === rhs.asset?.image && lhs.parentID == rhs.parentID && lhs.isGroup == rhs.isGroup && lhs.opacity == rhs.opacity && lhs.blendMode == rhs.blendMode && lhs.mask == rhs.mask && lhs.maskSourceID == rhs.maskSourceID && lhs.adjustment == rhs.adjustment && lhs.shape == rhs.shape
+            && lhs.asset?.image === rhs.asset?.image && lhs.parentID == rhs.parentID && lhs.isGroup == rhs.isGroup && lhs.opacity == rhs.opacity && lhs.blendMode == rhs.blendMode && lhs.mask == rhs.mask && lhs.maskSourceID == rhs.maskSourceID && lhs.smartObjectID == rhs.smartObjectID && lhs.adjustment == rhs.adjustment && lhs.shape == rhs.shape
     }
     let id: UUID
     var asset: ImportedImage?
@@ -16,6 +16,8 @@ struct ImageLayer: Identifiable, Equatable {
     var opacity: Double = 1
     var blendMode: LayerBlendMode = .normal
     var maskSourceID: UUID?
+    /// Shared embedded source pixels. Instances with the same ID update together; nil is an ordinary raster layer.
+    var smartObjectID: UUID?
     var mask: LayerMask?
     var adjustment: LayerAdjustment?
     /// Set on layers the Shape tool made; see `liveShape`.
@@ -36,7 +38,7 @@ struct ImageLayer: Identifiable, Equatable {
         self.name = name
     }
 
-    init(id: UUID, asset: ImportedImage?, name: String, isVisible: Bool, transform: LayerTransform, parentID: UUID? = nil, isGroup: Bool = false, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: LayerMask? = nil, maskSourceID: UUID? = nil, adjustment: LayerAdjustment? = nil, shape: LayerShape? = nil) {
+    init(id: UUID, asset: ImportedImage?, name: String, isVisible: Bool, transform: LayerTransform, parentID: UUID? = nil, isGroup: Bool = false, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: LayerMask? = nil, maskSourceID: UUID? = nil, smartObjectID: UUID? = nil, adjustment: LayerAdjustment? = nil, shape: LayerShape? = nil) {
         self.id = id
         self.asset = asset
         self.name = name
@@ -48,6 +50,7 @@ struct ImageLayer: Identifiable, Equatable {
         self.blendMode = blendMode
         self.mask = mask
         self.maskSourceID = maskSourceID
+        self.smartObjectID = smartObjectID
         self.adjustment = adjustment
         self.shape = shape
     }
@@ -59,14 +62,17 @@ struct CanvasDocument: Equatable {
     let height: Int
     var resolution: Double = 72
     var layers: [ImageLayer] = [] // Bottom to top.
+    /// Canonical embedded sources. Layers keep the same immutable asset reference for existing rendering paths.
+    var smartObjects: [UUID: SmartObjectContent] = [:]
     /// Part of the document so undo/redo covers selection changes. Not saved to disk.
     var selection: DocumentSelection?
     var size: CGSize { CGSize(width: width, height: height) }
-    init(id: UUID = UUID(), width: Int, height: Int, layers: [ImageLayer] = [], resolution: Double = 72) {
+    init(id: UUID = UUID(), width: Int, height: Int, layers: [ImageLayer] = [], smartObjects: [UUID: SmartObjectContent] = [:], resolution: Double = 72) {
         self.id = id
         self.width = width
         self.height = height
         self.layers = layers
+        self.smartObjects = smartObjects
         self.resolution = resolution
     }
 
@@ -136,7 +142,7 @@ final class EditorSession {
     private var fileRequestWaiters: [CheckedContinuation<Void, Never>] = []
     var canStartProjectOperation: Bool {
         _ = showsBusy // Re-evaluate in the UI when a long operation starts or ends.
-        return !isProjectBusy && !isImporting && brushStroke == nil && warpStroke == nil && levels == nil && !showsNewDocument && !showsImporter && renamingLayerID == nil && importError == nil && adjustmentEditingID == nil
+        return !isProjectBusy && !isImporting && brushStroke == nil && warpStroke == nil && levels == nil && !showsNewDocument && !showsImporter && !showsSmartObjectReplacer && renamingLayerID == nil && importError == nil && adjustmentEditingID == nil
     }
     func waitForFileRequest() async {
         while !canStartProjectOperation {
@@ -425,6 +431,7 @@ final class EditorSession {
     }
     var showsNewDocument = false { didSet { resumeFileRequests() } }
     var showsImporter = false { didSet { resumeFileRequests() } }
+    var showsSmartObjectReplacer = false { didSet { resumeFileRequests() } }
     var isImporting = false { didSet { resumeFileRequests() } }
     var importError: String? { didSet { resumeFileRequests() } }
     var opacityEditLayerID: UUID?
@@ -443,7 +450,7 @@ final class EditorSession {
     var isModified: Bool { history.isModified }
     var canUseHistory: Bool {
         _ = showsBusy
-        return !isProjectBusy && !isImporting && brushStroke == nil && warpStroke == nil && levels == nil && !showsNewDocument && !showsImporter && renamingLayerID == nil && importError == nil && transformEdit == nil
+        return !isProjectBusy && !isImporting && brushStroke == nil && warpStroke == nil && levels == nil && !showsNewDocument && !showsImporter && !showsSmartObjectReplacer && renamingLayerID == nil && importError == nil && transformEdit == nil
     }
     var canUndo: Bool { canUseHistory && (history.canUndo || gradientEdit != nil) }
     var canRedo: Bool { canUseHistory && history.canRedo }
@@ -480,7 +487,7 @@ final class EditorSession {
     var activeLayer: ImageLayer? { document?.layers.first { $0.id == activeLayerID } }
     var canEditLayers: Bool {
         _ = showsBusy
-        return document != nil && brushStroke == nil && warpStroke == nil && !isProjectBusy && !isImporting && !showsNewDocument && !showsImporter && renamingLayerID == nil && transformEdit == nil && cropRect == nil && gradientEdit == nil && pixelMove == nil && hueSaturation == nil && levels == nil && filterEdit == nil && adjustmentEditingID == nil
+        return document != nil && brushStroke == nil && warpStroke == nil && !isProjectBusy && !isImporting && !showsNewDocument && !showsImporter && !showsSmartObjectReplacer && renamingLayerID == nil && transformEdit == nil && cropRect == nil && gradientEdit == nil && pixelMove == nil && hueSaturation == nil && levels == nil && filterEdit == nil && adjustmentEditingID == nil
     }
 
     func addBlankLayer() {
@@ -626,10 +633,7 @@ final class EditorSession {
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             do {
                 guard url.isFileURL else { throw ImageImportError.unsupported }
-                let usedPixels = document?.layers.reduce(0) { total, layer in
-                    guard let image = layer.asset?.image else { return total }
-                    return total + image.width * image.height
-                } ?? 0
+                let usedPixels = document?.sourcePixelCount() ?? 0
                 let asset = try await ImageImporter.shared.decode(url, remainingPixels: 100_000_000 - usedPixels)
                 insert(asset, centeredAt: point)
             } catch {

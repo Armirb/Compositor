@@ -223,6 +223,15 @@ struct CompositorApp: App {
                         session.adjustmentEditingID = session.activeLayerID
                     }.disabled(!session.canEditLayers || session.activeLayer?.adjustment == nil)
                     Divider()
+                    Button("Convert to Smart Object") { session.convertActiveLayerToSmartObject() }
+                        .disabled(!session.canConvertToSmartObject)
+                    Button("New Smart Object via Copy") { session.newSmartObjectViaCopy() }
+                        .disabled(!session.canRasterizeSmartObject)
+                    Button("Replace Smart Object Contents…") { session.showsSmartObjectReplacer = true }
+                        .disabled(!session.canReplaceSmartObjectContents)
+                    Button("Rasterize Smart Object") { session.rasterizeActiveSmartObject() }
+                        .disabled(!session.canRasterizeSmartObject)
+                    Divider()
                     Button(session.canTransformSelection ? "Transform Selection" : "Transform Layer") { session.transformCommand() }
                         .keyboardShortcut("t").disabled(!session.canTransform && !session.canTransformSelection)
                     Button(session.selection == nil ? "Duplicate Layer" : "Layer via Copy") { session.layerViaCopy() }

@@ -66,6 +66,7 @@ extension EditorSession {
         finishOpacityEdit()
         beginEdit(plan.action)
         self.document?.layers = next
+        self.document?.pruneUnusedSmartObjects()
         activeLayerID = merged.id
         endEdit()
     }
