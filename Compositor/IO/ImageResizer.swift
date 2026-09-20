@@ -98,7 +98,8 @@ actor ImageResizer {
                 }
             }
             manifest.layers.append(ProjectLayerRecord(id: layer.id, name: layer.name, isVisible: layer.isVisible,
-                transform: transform, imageFile: layer.imageFile, parentID: layer.parentID, isGroup: layer.isGroup, opacity: layer.opacity, blendMode: layer.blendMode, maskFile: layer.maskFile, maskEnabled: layer.maskEnabled, maskSourceID: layer.maskSourceID, smartObjectID: layer.smartObjectID, adjustment: layer.adjustment,
+                transform: transform, imageFile: layer.imageFile, parentID: layer.parentID, isGroup: layer.isGroup, opacity: layer.opacity, blendMode: layer.blendMode, maskFile: layer.maskFile, maskEnabled: layer.maskEnabled, maskSourceID: layer.maskSourceID, smartObjectID: layer.smartObjectID,
+                smartObjectCorners: layer.smartObjectCorners?.map { CGPoint(x: $0.x * sx, y: $0.y * sy) }, adjustment: layer.adjustment,
                 maskPlacement: layer.maskPlacement.map { $0.placing($0.unitToDocument.concatenating(CGAffineTransform(scaleX: sx, y: sy))) },
                 maskLinked: layer.maskLinked))
         }
@@ -117,7 +118,7 @@ extension EditorSession {
         let m = snapshot.manifest
         document = CanvasDocument(id: m.documentID, width: m.width, height: m.height,
             layers: m.layers.map { ImageLayer(id: $0.id, asset: snapshot.images[$0.id], name: $0.name,
-                isVisible: $0.isVisible, transform: $0.transform, parentID: $0.parentID, isGroup: $0.isGroup == true, opacity: $0.opacity ?? 1, blendMode: $0.blendMode ?? .normal, mask: snapshot.mask(for: $0), maskSourceID: $0.maskSourceID, smartObjectID: $0.smartObjectID, adjustment: $0.adjustment) },
+                isVisible: $0.isVisible, transform: $0.transform, parentID: $0.parentID, isGroup: $0.isGroup == true, opacity: $0.opacity ?? 1, blendMode: $0.blendMode ?? .normal, mask: snapshot.mask(for: $0), maskSourceID: $0.maskSourceID, smartObjectID: $0.smartObjectID, smartObjectCorners: $0.smartObjectCorners, adjustment: $0.adjustment) },
             smartObjects: Dictionary(uniqueKeysWithValues: snapshot.smartObjects.map {
                 ($0.key, SmartObjectContent(id: $0.key, asset: $0.value))
             }), resolution: m.resolution ?? 72)

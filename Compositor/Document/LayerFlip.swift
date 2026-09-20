@@ -41,7 +41,16 @@ extension EditorSession {
         beginEdit(horizontally ? "Flip Horizontal" : "Flip Vertical")
         for index in document.layers.indices where ids.contains(document.layers[index].id) {
             let layer = document.layers[index]
-            let flipped = layer.transform.mirrored(horizontally: horizontally, across: axis)
+            var flipped = layer.transform.mirrored(horizontally: horizontally, across: axis)
+            if let corners = layer.smartObjectCorners {
+                self.document?.layers[index].smartObjectCorners = corners.map {
+                    horizontally ? CGPoint(x: 2 * axis - $0.x, y: $0.y)
+                        : CGPoint(x: $0.x, y: 2 * axis - $0.y)
+                }
+                // The mirrored corner coordinates already flip the pixels; toggling the source again would undo it.
+                flipped.flipX = layer.transform.flipX
+                flipped.flipY = layer.transform.flipY
+            }
             if let mask = layer.mask {
                 self.document?.layers[index].mask?.placement = mask.placement(movingLayer: layer.transform, to: flipped)
             }
@@ -61,7 +70,16 @@ extension EditorSession {
         beginEdit(horizontally ? "Flip Canvas Horizontal" : "Flip Canvas Vertical")
         for index in document.layers.indices {
             let layer = document.layers[index]
-            self.document?.layers[index].transform = layer.transform.mirrored(horizontally: horizontally, across: axis)
+            var flipped = layer.transform.mirrored(horizontally: horizontally, across: axis)
+            if let corners = layer.smartObjectCorners {
+                self.document?.layers[index].smartObjectCorners = corners.map {
+                    horizontally ? CGPoint(x: 2 * axis - $0.x, y: $0.y)
+                        : CGPoint(x: $0.x, y: 2 * axis - $0.y)
+                }
+                flipped.flipX = layer.transform.flipX
+                flipped.flipY = layer.transform.flipY
+            }
+            self.document?.layers[index].transform = flipped
             if let placement = layer.mask?.placement {
                 self.document?.layers[index].mask?.placement = placement.mirrored(horizontally: horizontally, across: axis)
             }

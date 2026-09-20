@@ -201,12 +201,16 @@ final class ProjectWorkspace {
             let layers = copied.map { layer -> ImageLayer in
                 var transform = layer.transform
                 transform.origin.x += center.x-anchor.x; transform.origin.y += center.y-anchor.y
+                let corners = layer.smartObjectCorners?.map {
+                    CGPoint(x: $0.x + center.x - anchor.x, y: $0.y + center.y - anchor.y)
+                }
                 var mask = layer.mask
                 mask?.placement?.origin.x += center.x-anchor.x; mask?.placement?.origin.y += center.y-anchor.y
                 return ImageLayer(id: mapping[layer.id]!, asset: layer.asset, name: layer.name, isVisible: layer.isVisible,
                     transform: transform, parentID: layer.parentID.flatMap { mapping[$0] }, isGroup: layer.isGroup,
                     opacity: layer.opacity, blendMode: layer.blendMode, mask: mask, maskSourceID: layer.maskSourceID.flatMap { mapping[$0] },
-                    smartObjectID: layer.smartObjectID.flatMap { contentMapping[$0] }, adjustment: layer.adjustment, shape: layer.shape)
+                    smartObjectID: layer.smartObjectID.flatMap { contentMapping[$0] }, smartObjectCorners: corners,
+                    adjustment: layer.adjustment, shape: layer.shape)
             }
             target.session.isProjectBusy = false
             target.session.beginEdit("Copy Layers from Project")

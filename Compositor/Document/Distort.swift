@@ -26,6 +26,14 @@ nonisolated enum DistortWarp {
         return true
     }
 
+    static func contains(_ point: CGPoint, corners: [CGPoint]) -> Bool {
+        guard isUsable(corners) else { return false }
+        let path = CGMutablePath()
+        path.addLines(between: corners)
+        path.closeSubpath()
+        return path.contains(point)
+    }
+
     /// The perspective mapping of the unit square (corners in `corners(of:)` order) onto `c`.
     static func homography(_ c: [CGPoint]) -> (CGPoint) -> CGPoint {
         let sx = c[0].x - c[1].x + c[2].x - c[3].x, sy = c[0].y - c[1].y + c[2].y - c[3].y
@@ -183,7 +191,7 @@ struct DistortPreviewCache {
 }
 
 extension EditorSession {
-    /// Smart Object source pixels stay protected. Their layer masks may still be distorted independently.
+    /// Pixel layers rasterize on Apply; Smart Objects retain their source and store the four-corner frame.
     var canDistortCurrentTarget: Bool {
         if transformEdit?.mask == true || (transformEdit == nil && transformTargetsMask) { return true }
         let targets: [ImageLayer]
@@ -195,7 +203,7 @@ extension EditorSession {
         } else {
             targets = activeLayer.map { [$0] } ?? []
         }
-        return !targets.isEmpty && targets.allSatisfy { $0.smartObjectID == nil }
+        return !targets.isEmpty
     }
 
     /// Cmd-drag on a transform handle: the corners start moving freely. Each distortion resamples
@@ -224,9 +232,19 @@ extension EditorSession {
 
     /// The layer warped into the pending distortion, at preview size, for the canvas to draw.
     func distortPreview(for layer: ImageLayer) -> (image: CGImage, mask: CGImage?, transform: LayerTransform)? {
-        guard let edit = transformEdit, !edit.mask, let shape = edit.corners, let image = layer.asset?.image,
-              let target = distortTarget(for: layer, edit: edit, shape: shape) else { return nil }
-        let transform = target.transform, corners = target.corners
+        guard let image = layer.asset?.image else { return nil }
+        let target: (transform: LayerTransform, corners: [CGPoint])
+        if let edit = transformEdit, !edit.mask, let shape = edit.corners,
+           let pending = distortTarget(for: layer, edit: edit, shape: shape) {
+            target = pending
+        } else if let corners = layer.smartObjectCorners {
+            target = (layer.transform, corners)
+        } else { return nil }
+        let transform = target.transform
+        let frameCorners = target.corners
+        let corners = layer.isSmartObject
+            ? SmartObjectGeometry.aspectFitCorners(image: image, frame: transform, corners: frameCorners)
+            : frameCorners
         let mask = layer.mask?.enabledImage
         if let cache = distortPreviewCache[layer.id], cache.corners == corners, cache.draft == transform,
            cache.image === image, cache.mask === mask { return cache.result }
@@ -238,7 +256,7 @@ extension EditorSession {
                 warpedMask = mask.flatMap { try? DistortWarp.warp($0, transform: transform, corners: corners, isMask: true, limit: 2048).image }
             } else if let owned, owned.isLinked, let placed = owned.placement,
                       case let placement = placed.following(from: layer.transform, to: transform),
-                      case let carried = DistortWarp.carried(placement, by: transform, to: corners), DistortWarp.isUsable(carried),
+                      case let carried = DistortWarp.carried(placement, by: transform, to: frameCorners), DistortWarp.isUsable(carried),
                       let moved = try? DistortWarp.warpMask(owned.asset.image, transform: placement, corners: carried,
                                                             background: LayerMask.background(of: owned.asset.thumbnail), limit: 2048) {
                 // A linked mask placed apart takes the same perspective over its own bounds.
@@ -264,8 +282,13 @@ extension EditorSession {
         for id in ids {
             guard let index = document?.layers.firstIndex(where: { $0.id == id }), let layer = document?.layers[index],
                   let target = distortTarget(for: layer, edit: edit, shape: shape) else { continue }
-            do { try distort(at: index, transform: target.transform, corners: target.corners) }
-            catch { brushError = error.localizedDescription }
+            if layer.isSmartObject {
+                document?.layers[index].transform = target.transform
+                document?.layers[index].smartObjectCorners = target.corners
+            } else {
+                do { try distort(at: index, transform: target.transform, corners: target.corners) }
+                catch { brushError = error.localizedDescription }
+            }
         }
         endEdit()
     }

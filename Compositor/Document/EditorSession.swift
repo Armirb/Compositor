@@ -3,7 +3,7 @@ import SwiftUI
 struct ImageLayer: Identifiable, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.name == rhs.name && lhs.isVisible == rhs.isVisible && lhs.transform == rhs.transform
-            && lhs.asset?.image === rhs.asset?.image && lhs.parentID == rhs.parentID && lhs.isGroup == rhs.isGroup && lhs.opacity == rhs.opacity && lhs.blendMode == rhs.blendMode && lhs.mask == rhs.mask && lhs.maskSourceID == rhs.maskSourceID && lhs.smartObjectID == rhs.smartObjectID && lhs.adjustment == rhs.adjustment && lhs.shape == rhs.shape
+            && lhs.asset?.image === rhs.asset?.image && lhs.parentID == rhs.parentID && lhs.isGroup == rhs.isGroup && lhs.opacity == rhs.opacity && lhs.blendMode == rhs.blendMode && lhs.mask == rhs.mask && lhs.maskSourceID == rhs.maskSourceID && lhs.smartObjectID == rhs.smartObjectID && lhs.smartObjectCorners == rhs.smartObjectCorners && lhs.adjustment == rhs.adjustment && lhs.shape == rhs.shape
     }
     let id: UUID
     var asset: ImportedImage?
@@ -18,6 +18,8 @@ struct ImageLayer: Identifiable, Equatable {
     var maskSourceID: UUID?
     /// Shared embedded source pixels. Instances with the same ID update together; nil is an ordinary raster layer.
     var smartObjectID: UUID?
+    /// Optional Photoshop-style perspective frame, in document coordinates and TL/TR/BR/BL order.
+    var smartObjectCorners: [CGPoint]?
     var mask: LayerMask?
     var adjustment: LayerAdjustment?
     /// Set on layers the Shape tool made; see `liveShape`.
@@ -38,7 +40,7 @@ struct ImageLayer: Identifiable, Equatable {
         self.name = name
     }
 
-    init(id: UUID, asset: ImportedImage?, name: String, isVisible: Bool, transform: LayerTransform, parentID: UUID? = nil, isGroup: Bool = false, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: LayerMask? = nil, maskSourceID: UUID? = nil, smartObjectID: UUID? = nil, adjustment: LayerAdjustment? = nil, shape: LayerShape? = nil) {
+    init(id: UUID, asset: ImportedImage?, name: String, isVisible: Bool, transform: LayerTransform, parentID: UUID? = nil, isGroup: Bool = false, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: LayerMask? = nil, maskSourceID: UUID? = nil, smartObjectID: UUID? = nil, smartObjectCorners: [CGPoint]? = nil, adjustment: LayerAdjustment? = nil, shape: LayerShape? = nil) {
         self.id = id
         self.asset = asset
         self.name = name
@@ -51,6 +53,7 @@ struct ImageLayer: Identifiable, Equatable {
         self.mask = mask
         self.maskSourceID = maskSourceID
         self.smartObjectID = smartObjectID
+        self.smartObjectCorners = smartObjectCorners
         self.adjustment = adjustment
         self.shape = shape
     }
@@ -318,7 +321,8 @@ final class EditorSession {
         // An unlinked mask, when selected, transforms on its own; linked, layer and mask move together.
         let maskAlone = isMaskSelected && layer.mask?.isLinked == false
         transformEdit = TransformEdit(layerID: layer.id, draft: maskAlone ? layer.maskTransform : layer.transform,
-                                      persistent: persistent, mask: maskAlone)
+                                      persistent: persistent, corners: maskAlone ? nil : layer.smartObjectCorners,
+                                      mask: maskAlone)
     }
     func previewTransform(_ value: LayerTransform) {
         guard value.isValid, transformEdit != nil else { return }
@@ -361,6 +365,10 @@ final class EditorSession {
                 guard moved.isValid else { continue }
                 if let mask = document?.layers[index].mask {
                     document?.layers[index].mask?.placement = mask.placement(movingLayer: original, to: moved)
+                }
+                if let corners = document?.layers[index].smartObjectCorners {
+                    let map = original.unitToDocument.inverted().concatenating(moved.unitToDocument)
+                    document?.layers[index].smartObjectCorners = corners.map { $0.applying(map) }
                 }
                 document?.layers[index].transform = moved
                 redrawShape(at: index)

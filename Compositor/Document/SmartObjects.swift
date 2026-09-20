@@ -16,6 +16,39 @@ extension ImageLayer {
     var isSmartObject: Bool { smartObjectID != nil }
 }
 
+/// Placement math shared by the live canvas, export, and rasterization paths.
+/// A Smart Object's transform/corners describe its frame; the source is uniformly contained inside it.
+nonisolated enum SmartObjectGeometry {
+    static func aspectFitTransform(image: CGImage, in frame: LayerTransform) -> LayerTransform {
+        let width = CGFloat(image.width), height = CGFloat(image.height)
+        guard width > 0, height > 0 else { return frame }
+        let scale = min(frame.size.width / width, frame.size.height / height)
+        var result = frame
+        result.size = CGSize(width: width * scale, height: height * scale)
+        result.origin = CGPoint(x: frame.center.x - result.size.width / 2,
+                                y: frame.center.y - result.size.height / 2)
+        return result
+    }
+
+    /// The contained source rectangle carried into a four-corner perspective frame.
+    static func aspectFitCorners(image: CGImage, frame: LayerTransform, corners: [CGPoint]) -> [CGPoint] {
+        guard DistortWarp.isUsable(corners) else { return corners }
+        let imageAspect = CGFloat(image.width) / CGFloat(max(1, image.height))
+        let frameAspect = frame.size.width / frame.size.height
+        var left: CGFloat = 0, top: CGFloat = 0, right: CGFloat = 1, bottom: CGFloat = 1
+        if imageAspect > frameAspect {
+            let height = frameAspect / imageAspect
+            top = (1 - height) / 2; bottom = top + height
+        } else {
+            let width = imageAspect / frameAspect
+            left = (1 - width) / 2; right = left + width
+        }
+        let map = DistortWarp.homography(corners)
+        return [CGPoint(x: left, y: top), CGPoint(x: right, y: top),
+                CGPoint(x: right, y: bottom), CGPoint(x: left, y: bottom)].map(map)
+    }
+}
+
 extension CanvasDocument {
     /// Image-pixel budget with shared Smart Object contents counted once rather than once per instance.
     func sourcePixelCount(excludingSmartObject excluded: UUID? = nil) -> Int {
@@ -68,7 +101,7 @@ extension EditorSession {
         let copy = ImageLayer(id: UUID(), asset: source.asset, name: "\(layer.name) copy", isVisible: layer.isVisible,
             transform: layer.transform, parentID: layer.parentID, isGroup: false, opacity: layer.opacity,
             blendMode: layer.blendMode, mask: layer.mask, maskSourceID: layer.maskSourceID,
-            smartObjectID: contentID)
+            smartObjectID: contentID, smartObjectCorners: layer.smartObjectCorners)
         beginEdit("New Smart Object via Copy")
         self.document?.smartObjects[contentID] = SmartObjectContent(id: contentID, asset: source.asset)
         self.document?.layers.insert(copy, at: index + 1)
@@ -77,9 +110,29 @@ extension EditorSession {
     }
 
     func rasterizeActiveSmartObject() {
-        guard canRasterizeSmartObject, let index = document?.layers.firstIndex(where: { $0.id == activeLayerID }) else { return }
+        guard canRasterizeSmartObject, let index = document?.layers.firstIndex(where: { $0.id == activeLayerID }),
+              let layer = document?.layers[index], let image = layer.asset?.image else { return }
+        var rasterized: (asset: ImportedImage, transform: LayerTransform)?
+        if let corners = layer.smartObjectCorners {
+            do {
+                let fitted = SmartObjectGeometry.aspectFitCorners(image: image, frame: layer.transform, corners: corners)
+                let warped = try DistortWarp.warpTrimmed(image, transform: layer.transform, corners: fitted)
+                rasterized = (ImportedImage(image: warped.image,
+                    thumbnail: try PixelAdjust.thumbnail(of: warped.image), name: layer.name), warped.transform)
+            } catch {
+                brushError = error.localizedDescription
+                return
+            }
+        }
         beginEdit("Rasterize Smart Object")
+        if let rasterized {
+            document?.layers[index].asset = rasterized.asset
+            document?.layers[index].transform = rasterized.transform
+        } else {
+            document?.layers[index].transform = SmartObjectGeometry.aspectFitTransform(image: image, in: layer.transform)
+        }
         document?.layers[index].smartObjectID = nil
+        document?.layers[index].smartObjectCorners = nil
         document?.pruneUnusedSmartObjects()
         endEdit()
     }
@@ -96,6 +149,7 @@ extension EditorSession {
             document?.layers[index].shape = nil
         }
         endEdit()
+        distortPreviewCache = [:]
         brushRevision += 1
     }
 

@@ -76,6 +76,9 @@ final class TransformOverlay: NSView {
         if let edit = session.transformEdit, edit.layerID == layer.id, let corners = edit.corners {
             return TransformOverlayGeometry(corners: corners, viewport: session.viewport, documentSize: document.size)
         }
+        if session.transformEdit == nil, let corners = layer.smartObjectCorners {
+            return TransformOverlayGeometry(corners: corners, viewport: session.viewport, documentSize: document.size)
+        }
         return TransformOverlayGeometry(transform: session.editedTransform(for: layer),
                                         viewport: session.viewport, documentSize: document.size)
     }

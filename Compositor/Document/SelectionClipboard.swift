@@ -150,7 +150,8 @@ extension EditorSession {
         let copy = ImageLayer(id: UUID(), asset: layer.asset, name: "\(layer.name) copy", isVisible: layer.isVisible,
                               transform: layer.transform, parentID: layer.parentID, isGroup: false,
                               opacity: layer.opacity, blendMode: layer.blendMode, mask: layer.mask, maskSourceID: layer.maskSourceID,
-                              smartObjectID: layer.smartObjectID, adjustment: layer.adjustment, shape: layer.shape)
+                              smartObjectID: layer.smartObjectID, smartObjectCorners: layer.smartObjectCorners,
+                              adjustment: layer.adjustment, shape: layer.shape)
         beginEdit("Duplicate Layer")
         document?.layers.insert(copy, at: index + 1)
         activeLayerID = copy.id

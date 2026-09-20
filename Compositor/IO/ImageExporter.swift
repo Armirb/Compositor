@@ -39,9 +39,30 @@ actor ImageExporter {
             try LiveMaskGraph.validate(snapshot.manifest.layers)
             let live = LiveMaskRenderer(bounds: CGRect(x: 0, y: 0, width: width, height: height), source: { records[$0]?.maskSourceID }) { id, target in
                 guard let layer = records[id], let image = snapshot.images[id]?.image else { return }
-                let mask = snapshot.mask(for: layer).flatMap { $0.clipImage(placement: $0.placement, over: layer.transform, width: image.width, height: image.height) }
+                var drawImage = image
+                var drawTransform = layer.transform
+                var mask: CGImage?
+                if layer.smartObjectID != nil, let frameCorners = layer.smartObjectCorners {
+                    let contentCorners = SmartObjectGeometry.aspectFitCorners(image: image, frame: layer.transform, corners: frameCorners)
+                    guard let warped = try? DistortWarp.warp(image, transform: layer.transform,
+                                                              corners: contentCorners, isMask: false) else { return }
+                    drawImage = warped.image
+                    drawTransform = warped.transform
+                    if let owned = snapshot.mask(for: layer), let source = owned.enabledImage {
+                        mask = try? DistortWarp.warp(source, transform: layer.transform,
+                                                    corners: contentCorners, isMask: true).image
+                    }
+                } else {
+                    if layer.smartObjectID != nil {
+                        drawTransform = SmartObjectGeometry.aspectFitTransform(image: image, in: layer.transform)
+                    }
+                    mask = snapshot.mask(for: layer).flatMap {
+                        $0.clipImage(placement: $0.placement, over: drawTransform,
+                                     width: image.width, height: image.height)
+                    }
+                }
                 func drawLayer(_ mode: LayerBlendMode, _ into: CGContext) {
-                    LayerRenderer.draw(image, transform: layer.transform, center: layer.transform.center,
+                    LayerRenderer.draw(drawImage, transform: drawTransform, center: drawTransform.center,
                         opacity: layer.opacity ?? 1, blendMode: mode, mask: mask, in: into)
                 }
                 let mode = layer.blendMode ?? .normal

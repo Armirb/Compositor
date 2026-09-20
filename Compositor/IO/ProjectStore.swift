@@ -9,7 +9,7 @@ extension UTType {
 
 nonisolated struct ProjectManifest: Codable, Sendable {
     var format = "com.compositor.project"
-    var version = 8
+    var version = 9
     var colorSpace = "sRGB"
     var resolution: Double? = nil // Older version-1 projects default to 72 pixels/inch.
     let documentID: UUID
@@ -41,6 +41,8 @@ nonisolated struct ProjectLayerRecord: Codable, Sendable {
     var maskEnabled: Bool? = nil
     var maskSourceID: UUID? = nil
     var smartObjectID: UUID? = nil
+    /// Optional Smart Object perspective frame, in TL/TR/BR/BL document-space order.
+    var smartObjectCorners: [CGPoint]? = nil
     var adjustment: LayerAdjustment? = nil
     /// A mask moved apart from its layer: where it sits on the document.
     var maskPlacement: LayerTransform? = nil
@@ -62,7 +64,7 @@ nonisolated enum ProjectError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalid: "This is not a valid Compositor project, or its metadata is damaged."
-        case .version(let version): "This project uses format version \(version). This app supports versions 1–8."
+        case .version(let version): "This project uses format version \(version). This app supports versions 1–9."
         case .missingImage: "An image inside the project is missing or damaged. The current document has not been replaced."
         case .tooLarge: "This project exceeds the supported canvas, layer, file-size, or 100-megapixel image limit."
         case .encode: "An image could not be saved. The previous project has not been replaced."
@@ -155,7 +157,7 @@ actor ProjectStore {
         do { header = try JSONDecoder().decode(Header.self, from: metadata) }
         catch { throw ProjectError.invalid }
         guard header.format == "com.compositor.project" else { throw ProjectError.invalid }
-        guard (1...8).contains(header.version) else { throw ProjectError.version(header.version) }
+        guard (1...9).contains(header.version) else { throw ProjectError.version(header.version) }
         do { manifest = try JSONDecoder().decode(ProjectManifest.self, from: metadata) }
         catch { throw ProjectError.invalid }
         try validate(manifest)
@@ -225,7 +227,7 @@ actor ProjectStore {
 
     private func validate(_ manifest: ProjectManifest) throws {
         guard manifest.format == "com.compositor.project" else { throw ProjectError.invalid }
-        guard (1...8).contains(manifest.version) else { throw ProjectError.version(manifest.version) }
+        guard (1...9).contains(manifest.version) else { throw ProjectError.version(manifest.version) }
         guard manifest.colorSpace == "sRGB" else { throw ProjectError.invalid }
         if let resolution = manifest.resolution {
             guard resolution.isFinite, (1...9600).contains(resolution) else { throw ProjectError.invalid }
@@ -250,6 +252,10 @@ actor ProjectStore {
                 guard manifest.version >= 8, smartIDs.contains(smartObjectID), layer.isGroup != true,
                       layer.imageFile == nil, layer.adjustment == nil else { throw ProjectError.invalid }
             }
+            if let corners = layer.smartObjectCorners {
+                guard manifest.version >= 9, layer.smartObjectID != nil,
+                      DistortWarp.isUsable(corners) else { throw ProjectError.invalid }
+            }
             // Layer masks arrived in version 4, folder masks in version 6.
             guard layer.maskFile == nil || (manifest.version >= (layer.isGroup == true ? 6 : 4)
                 && layer.maskFile == "\(layer.id.uuidString).mask.png"),
@@ -265,6 +271,7 @@ actor ProjectStore {
         try LiveMaskGraph.validate(manifest.layers)
         if manifest.version < 5, manifest.layers.contains(where: { $0.maskSourceID != nil }) { throw ProjectError.invalid }
         if manifest.version < 8, manifest.layers.contains(where: { $0.smartObjectID != nil }) { throw ProjectError.invalid }
+        if manifest.version < 9, manifest.layers.contains(where: { $0.smartObjectCorners != nil }) { throw ProjectError.invalid }
         if manifest.version == 1, manifest.layers.contains(where: { $0.parentID != nil || $0.isGroup == true }) { throw ProjectError.invalid }
         var ids = Set<UUID>()
         for layer in manifest.layers {

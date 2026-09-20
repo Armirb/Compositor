@@ -737,7 +737,10 @@ final class CanvasView: NSView {
                 return
             }
             // A mask stroke paints the mask's grid; the layer itself stays put.
-            let transform = (stroke?.isMask == true ? nil : stroke?.paintTransform) ?? session.displayedTransform(for: layer)
+            let frameTransform = (stroke?.isMask == true ? nil : stroke?.paintTransform) ?? session.displayedTransform(for: layer)
+            let transform = layer.isSmartObject && layer.smartObjectCorners == nil && stroke == nil
+                ? SmartObjectGeometry.aspectFitTransform(image: layer.asset!.image, in: frameTransform)
+                : frameTransform
             // A mask placed apart from its layer is resampled into the grid the layer draws in (at most 2048 pixels
             // across while something moves, else about the size it's drawn).
             let mask: CGImage? = {
@@ -1117,7 +1120,10 @@ final class CanvasView: NSView {
     /// layer: it need not land inside the layer's bounds.
     private func transformPressLayer(at pixel: CGPoint, flags: NSEvent.ModifierFlags) -> (id: UUID, picked: Bool)? {
         guard session.canEditLayers || session.transformEdit != nil, let document = session.document else { return nil }
-        let underPointer = document.renderLayers.reversed().first { $0.asset != nil && $0.transform.contains(pixel) }?.id
+        let underPointer = document.renderLayers.reversed().first {
+            $0.asset != nil && ($0.smartObjectCorners.map { DistortWarp.contains(pixel, corners: $0) }
+                ?? $0.transform.contains(pixel))
+        }?.id
         let active = session.activeLayer.flatMap { layer in
             layer.asset != nil && !layer.isGroup && document.effectiveVisibleIDs.contains(layer.id) ? layer : nil
         }
@@ -1129,7 +1135,12 @@ final class CanvasView: NSView {
             let box = session.transformEdit?.draft ?? session.groupTransformBox
             if box?.contains(pixel) == true || !(picks && session.transformAutoSelect) || underPointer == nil { return (id, false) }
         }
-        if let active, session.editedTransform(for: active).contains(pixel) { return (active.id, false) }
+        if let active {
+            let corners = session.transformEdit?.layerID == active.id
+                ? session.transformEdit?.corners : active.smartObjectCorners
+            if corners.map({ DistortWarp.contains(pixel, corners: $0) })
+                ?? session.editedTransform(for: active).contains(pixel) { return (active.id, false) }
+        }
         if picks, session.transformAutoSelect || flags.contains(.command), let underPointer { return (underPointer, true) }
         return active.map { ($0.id, false) }
     }
