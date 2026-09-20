@@ -31,19 +31,19 @@ struct SmartObjectTests {
         session.duplicateActiveLayer()
         #expect(session.document?.layers.count == 2)
         #expect(session.document?.layers.allSatisfy { $0.smartObjectID == contentID } == true)
-        let centers = try #require(session.document?.layers.map(\.transform.center))
+        let transforms = try #require(session.document?.layers.map(\.transform))
         let replacement = try asset(width: 40, height: 30, name: "Replacement", red: 0.1)
         session.replaceSmartObjectContents(with: replacement)
         let layers = try #require(session.document?.layers)
         #expect(layers.allSatisfy { $0.asset?.image === replacement.image })
-        #expect(layers.map(\.transform.center) == centers)
-        #expect(layers.allSatisfy { $0.transform.size == CGSize(width: 40, height: 30) })
+        #expect(layers.map(\.transform) == transforms)
 
         session.undo()
         #expect(session.document?.layers.allSatisfy { $0.asset?.image !== replacement.image } == true)
-        #expect(session.document?.layers.allSatisfy { $0.transform.size == CGSize(width: 20, height: 10) } == true)
+        #expect(session.document?.layers.map(\.transform) == transforms)
         session.redo()
         #expect(session.document?.layers.allSatisfy { $0.asset?.image === replacement.image } == true)
+        #expect(session.document?.layers.map(\.transform) == transforms)
     }
 
     @Test func viaCopyIsIndependentAndRasterizeDetachesOnlySelectedInstance() throws {

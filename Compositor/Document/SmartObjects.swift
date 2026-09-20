@@ -84,26 +84,15 @@ extension EditorSession {
         endEdit()
     }
 
-    /// Testable core of Replace Contents. Every instance receives the same immutable asset and keeps its center,
-    /// rotation, flips and per-axis scale relative to the old source dimensions.
+    /// Testable core of Replace Contents. Every instance receives the same immutable asset while its existing
+    /// document-space rectangle remains the container, regardless of the replacement image's pixel dimensions.
     func replaceSmartObjectContents(with asset: ImportedImage) {
         guard canReplaceSmartObjectContents, let contentID = activeLayer?.smartObjectID,
-              let old = document?.smartObjects[contentID]?.asset else { return }
+              document?.smartObjects[contentID] != nil else { return }
         beginEdit("Replace Smart Object Contents")
         document?.smartObjects[contentID] = SmartObjectContent(id: contentID, asset: asset)
         for index in document?.layers.indices ?? 0..<0 where document?.layers[index].smartObjectID == contentID {
-            guard let previous = document?.layers[index].transform else { continue }
-            var replacement = previous
-            replacement.size = CGSize(
-                width: CGFloat(asset.image.width) * previous.size.width / CGFloat(max(1, old.image.width)),
-                height: CGFloat(asset.image.height) * previous.size.height / CGFloat(max(1, old.image.height)))
-            replacement.origin = CGPoint(x: previous.center.x - replacement.size.width / 2,
-                                         y: previous.center.y - replacement.size.height / 2)
-            if let mask = document?.layers[index].mask {
-                document?.layers[index].mask?.placement = mask.placement(movingLayer: previous, to: replacement)
-            }
             document?.layers[index].asset = asset
-            document?.layers[index].transform = replacement
             document?.layers[index].shape = nil
         }
         endEdit()
